@@ -44,7 +44,7 @@ When using `localhost`, databases are only accessible on YOUR computer. Even wit
 #### 5. Update Your .env File
 ```bash
 # Replace with your actual connection string
-MONGO_URI=mongodb+srv://your_username:your_password@cluster0.xxxxx.mongodb.net/agriculture_db?retryWrites=true&w=majority
+MONGO_URI=url_mongodb_connection_string_here
 
 # Keep MySQL as localhost (each person has their own)
 MYSQL_HOST=localhost
