@@ -124,10 +124,10 @@ def main():
     
     # CSV to table mapping
     csv_mappings = [
-        ('rainfall.csv', 'rainfall'),
-        ('temp.csv', 'temperature'),
-        ('pesticides.csv', 'pesticides'),
-        ('yield.csv', 'crop_yield')
+        ('data/rainfall.csv', 'rainfall'),
+        ('data/temp.csv', 'temperature'),
+        ('data/pesticides.csv', 'pesticides'),
+        ('data/yield.csv', 'crop_yield')
     ]
     
     try:

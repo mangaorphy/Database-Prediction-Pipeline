@@ -26,8 +26,8 @@ def load_csv_to_mongodb(csv_file, collection_name, db, chunk_size=1000):
     # Get or create collection
     collection = db[collection_name]
     
-    # Clear existing data (optional - comment out to append)
-    # collection.delete_many({})
+    # Clear existing data
+    collection.delete_many({})
     
     total_docs = 0
     
@@ -168,10 +168,10 @@ def main():
     
     # CSV to collection mapping
     csv_mappings = [
-        ('rainfall.csv', 'rainfall'),
-        ('temp.csv', 'temperature'),
-        ('pesticides.csv', 'pesticides'),
-        ('yield.csv', 'crop_yield')
+        ('data/rainfall.csv', 'rainfall'),
+        ('data/temp.csv', 'temperature'),
+        ('data/pesticides.csv', 'pesticides'),
+        ('data/yield.csv', 'crop_yield')
     ]
     
     try:

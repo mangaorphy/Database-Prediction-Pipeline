@@ -99,7 +99,7 @@ except Exception as e:
 
 # Test 5: Check CSV files
 print("\n[5/5] Testing CSV files...")
-csv_files = ['rainfall.csv', 'temp.csv', 'pesticides.csv', 'yield.csv']
+csv_files = ['data/rainfall.csv', 'data/temp.csv', 'data/pesticides.csv', 'data/yield.csv']
 base_path = Path(__file__).parent
 
 for csv_file in csv_files:
