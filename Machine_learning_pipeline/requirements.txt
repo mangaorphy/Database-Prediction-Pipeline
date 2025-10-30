@@ -4,6 +4,12 @@ python-dotenv==1.0.0
 # Database drivers
 pymysql==1.1.0
 pymongo==4.6.0
+sqlalchemy==2.0.23
+
+# Web Framework
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
 
 # Data processing
 pandas==2.1.3
