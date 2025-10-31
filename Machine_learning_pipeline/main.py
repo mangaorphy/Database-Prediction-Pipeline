@@ -2,24 +2,35 @@
 FastAPI application for CRUD operations on agricultural database.
 
 Endpoints for managing Rainfall, Temperature, Pesticides, and Crop Yield data.
+Supports both MySQL (primary) and MongoDB (secondary) databases.
 """
 import os
-from typing import List, Optional
-from contextlib import contextmanager
+import json
+import math
+from typing import List, Optional, Any
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from fastapi.responses import JSONResponse
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
-from pydantic import BaseModel, Field
+from pymongo import MongoClient
+from bson import ObjectId
 from dotenv import load_dotenv
+
+# Import models and schemas from separate files
+from models import Base, Rainfall, Temperature, Pesticides, CropYield
+from schemas import (
+    RainfallCreate, RainfallUpdate, RainfallResponse,
+    TemperatureCreate, TemperatureUpdate, TemperatureResponse,
+    PesticidesCreate, PesticidesUpdate, PesticidesResponse,
+    CropYieldCreate, CropYieldUpdate, CropYieldResponse
+)
 
 # Load environment variables
 load_dotenv()
 
 # =====================
-# CONFIGURATION
+# MYSQL CONFIGURATION
 # =====================
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = os.getenv("MYSQL_PORT", "3306")
@@ -30,204 +41,123 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "agriculture_db")
 # Create MySQL connection string
 DATABASE_URL = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
 
-# Create engine and session
+# Create MySQL engine and session
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create base for models
-Base = declarative_base()
+# =====================
+# MONGODB CONFIGURATION (MongoDB Atlas)
+# =====================
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DATABASE = os.getenv("MONGO_DATABASE", "agriculture_db")
+
+# Create MongoDB client (supports both local and Atlas)
+try:
+    # Connect to MongoDB with proper timeout settings
+    mongo_client = MongoClient(
+        MONGO_URI, 
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000
+    )
+    
+    # Test connection with ping
+    mongo_client.admin.command('ping')
+    
+    # Get database (works for both local and Atlas)
+    mongo_db = mongo_client[MONGO_DATABASE]
+    
+    # Verify collections exist
+    collections = mongo_db.list_collection_names()
+    MONGODB_AVAILABLE = True
+    
+    print(f"✓ MongoDB Atlas connected successfully!")
+    print(f"  Database: {MONGO_DATABASE}")
+    print(f"  Collections: {', '.join(collections) if collections else 'No collections yet'}")
+    
+except Exception as e:
+    mongo_client = None
+    mongo_db = None
+    MONGODB_AVAILABLE = False
+    print(f"⚠ MongoDB not available: {e}")
+    print(f"  Continuing with MySQL only...")
 
 # =====================
-# PYDANTIC MODELS (Schemas)
+# HELPER FUNCTIONS
 # =====================
 
-# --- RAINFALL SCHEMAS ---
-class RainfallBase(BaseModel):
-    area: str = Field(..., min_length=1, description="Area name")
-    year: int = Field(..., ge=1900, le=2100, description="Year")
-    average_rain_fall_mm_per_year: Optional[float] = Field(None, ge=0, description="Average rainfall in mm/year")
+class NaNSafeJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles NaN and Infinity values."""
+    def encode(self, obj):
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return 'null'
+        return super().encode(obj)
+    
+    def iterencode(self, obj, _one_shot=False):
+        """Encode while handling NaN values."""
+        for chunk in super().iterencode(self._clean_data(obj), _one_shot):
+            yield chunk
+    
+    def _clean_data(self, obj):
+        """Recursively clean NaN and Inf values."""
+        if isinstance(obj, dict):
+            return {k: self._clean_data(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._clean_data(item) for item in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+        return obj
 
 
-class RainfallCreate(RainfallBase):
-    pass
+def clean_nan_values(obj):
+    """Replace NaN/Infinity values with None for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: clean_nan_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan_values(item) for item in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
 
 
-class RainfallUpdate(BaseModel):
-    area: Optional[str] = None
-    year: Optional[int] = None
-    average_rain_fall_mm_per_year: Optional[float] = None
-
-
-class RainfallResponse(RainfallBase):
-    id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-# --- TEMPERATURE SCHEMAS ---
-class TemperatureBase(BaseModel):
-    year: int = Field(..., ge=1900, le=2100, description="Year")
-    country: str = Field(..., min_length=1, description="Country name")
-    avg_temp: Optional[float] = Field(None, description="Average temperature in Celsius")
-
-
-class TemperatureCreate(TemperatureBase):
-    pass
-
-
-class TemperatureUpdate(BaseModel):
-    year: Optional[int] = None
-    country: Optional[str] = None
-    avg_temp: Optional[float] = None
-
-
-class TemperatureResponse(TemperatureBase):
-    id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-# --- PESTICIDES SCHEMAS ---
-class PesticidesBase(BaseModel):
-    domain: Optional[str] = None
-    area: str = Field(..., min_length=1, description="Area name")
-    element: Optional[str] = None
-    item: Optional[str] = None
-    year: int = Field(..., ge=1900, le=2100, description="Year")
-    unit: Optional[str] = None
-    value: Optional[float] = None
-
-
-class PesticidesCreate(PesticidesBase):
-    pass
-
-
-class PesticidesUpdate(BaseModel):
-    domain: Optional[str] = None
-    area: Optional[str] = None
-    element: Optional[str] = None
-    item: Optional[str] = None
-    year: Optional[int] = None
-    unit: Optional[str] = None
-    value: Optional[float] = None
-
-
-class PesticidesResponse(PesticidesBase):
-    id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-# --- CROP YIELD SCHEMAS ---
-class CropYieldBase(BaseModel):
-    domain_code: Optional[str] = None
-    domain: Optional[str] = None
-    area_code: Optional[int] = None
-    area: str = Field(..., min_length=1, description="Area name")
-    element_code: Optional[int] = None
-    element: Optional[str] = None
-    item_code: Optional[int] = None
-    item: str = Field(..., min_length=1, description="Item/Crop name")
-    year_code: Optional[int] = None
-    year: int = Field(..., ge=1900, le=2100, description="Year")
-    unit: Optional[str] = None
-    value: Optional[float] = None
-
-
-class CropYieldCreate(CropYieldBase):
-    pass
-
-
-class CropYieldUpdate(BaseModel):
-    domain_code: Optional[str] = None
-    domain: Optional[str] = None
-    area_code: Optional[int] = None
-    area: Optional[str] = None
-    element_code: Optional[int] = None
-    element: Optional[str] = None
-    item_code: Optional[int] = None
-    item: Optional[str] = None
-    year_code: Optional[int] = None
-    year: Optional[int] = None
-    unit: Optional[str] = None
-    value: Optional[float] = None
-
-
-class CropYieldResponse(CropYieldBase):
-    id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-# =====================
-# SQLALCHEMY MODELS
-# =====================
-
-class Rainfall(Base):
-    __tablename__ = "rainfall"
-    id = Column(Integer, primary_key=True, index=True)
-    area = Column(String(100), nullable=False, index=True)
-    year = Column(Integer, nullable=False, index=True)
-    average_rain_fall_mm_per_year = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class Temperature(Base):
-    __tablename__ = "temperature"
-    id = Column(Integer, primary_key=True, index=True)
-    year = Column(Integer, nullable=False, index=True)
-    country = Column(String(100), nullable=False, index=True)
-    avg_temp = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class Pesticides(Base):
-    __tablename__ = "pesticides"
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(String(100), nullable=True)
-    area = Column(String(100), nullable=False, index=True)
-    element = Column(String(100), nullable=True)
-    item = Column(String(100), nullable=True)
-    year = Column(Integer, nullable=False, index=True)
-    unit = Column(String(100), nullable=True)
-    value = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class CropYield(Base):
-    __tablename__ = "crop_yield"
-    id = Column(Integer, primary_key=True, index=True)
-    domain_code = Column(String(10), nullable=True)
-    domain = Column(String(100), nullable=True)
-    area_code = Column(Integer, nullable=True)
-    area = Column(String(100), nullable=False, index=True)
-    element_code = Column(Integer, nullable=True)
-    element = Column(String(100), nullable=True)
-    item_code = Column(Integer, nullable=True)
-    item = Column(String(100), nullable=False)
-    year_code = Column(Integer, nullable=True)
-    year = Column(Integer, nullable=False, index=True)
-    unit = Column(String(50), nullable=True)
-    value = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+def serialize_mongo_doc(doc):
+    """Convert MongoDB document to JSON-serializable dict."""
+    if doc is None:
+        return None
+    if isinstance(doc, list):
+        return [serialize_mongo_doc(d) for d in doc]
+    if '_id' in doc:
+        doc['_id'] = str(doc['_id'])
+    return clean_nan_values(doc)
 
 
 # =====================
 # FASTAPI APP SETUP
 # =====================
 
+# Custom JSON response class
+class SafeJSONResponse(JSONResponse):
+    """JSON response that handles NaN and Infinity values."""
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+            cls=NaNSafeJSONEncoder,
+        ).encode("utf-8")
+
+
 app = FastAPI(
     title="Agricultural Database API",
     description="CRUD API for managing agricultural data (Rainfall, Temperature, Pesticides, Crop Yield)",
     version="1.0.0",
+    default_response_class=SafeJSONResponse,  # Use custom response class
 )
 
 # Add CORS middleware
@@ -259,14 +189,39 @@ def get_db():
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Check API health and database connection."""
+    """Check API health and database connections."""
+    health_status = {
+        "status": "healthy",
+        "mysql": "disconnected",
+        "mongodb": "disconnected"
+    }
+    
+    # Check MySQL
     try:
         db = SessionLocal()
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db.close()
-        return {"status": "healthy", "database": "connected"}
+        health_status["mysql"] = "connected"
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
+        health_status["mysql"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    # Check MongoDB
+    if MONGODB_AVAILABLE and mongo_client:
+        try:
+            mongo_client.admin.command('ping')
+            health_status["mongodb"] = "connected"
+        except Exception as e:
+            health_status["mongodb"] = f"error: {str(e)}"
+            health_status["status"] = "degraded"
+    else:
+        health_status["mongodb"] = "not configured"
+    
+    # If MySQL is down, API is unhealthy
+    if health_status["mysql"] != "connected":
+        raise HTTPException(status_code=503, detail=health_status)
+    
+    return health_status
 
 
 # =====================
@@ -716,6 +671,145 @@ async def delete_crop_yield(crop_yield_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Failed to delete crop yield record: {str(e)}")
+
+
+# =====================
+# MONGODB QUERY ENDPOINTS (Aggregations & Analytics)
+# =====================
+
+@app.get("/mongodb/rainfall", tags=["MongoDB Analytics"])
+async def query_mongodb_rainfall(
+    area: Optional[str] = Query(None, description="Filter by area"),
+    year: Optional[int] = Query(None, description="Filter by year"),
+    limit: int = Query(10, ge=1, le=100, description="Limit results")
+):
+    """Query rainfall data from MongoDB with filters."""
+    if not MONGODB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    
+    try:
+        query = {}
+        if area:
+            query['area'] = {'$regex': area, '$options': 'i'}
+        if year:
+            query['year'] = year
+        
+        results = list(mongo_db.rainfall.find(query).limit(limit))
+        return {"count": len(results), "data": serialize_mongo_doc(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MongoDB query failed: {str(e)}")
+
+
+@app.get("/mongodb/temperature", tags=["MongoDB Analytics"])
+async def query_mongodb_temperature(
+    country: Optional[str] = Query(None, description="Filter by country"),
+    year: Optional[int] = Query(None, description="Filter by year"),
+    limit: int = Query(10, ge=1, le=100, description="Limit results")
+):
+    """Query temperature data from MongoDB with filters."""
+    if not MONGODB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    
+    try:
+        query = {}
+        if country:
+            query['country'] = {'$regex': country, '$options': 'i'}
+        if year:
+            query['year'] = year
+        
+        results = list(mongo_db.temperature.find(query).limit(limit))
+        return {"count": len(results), "data": serialize_mongo_doc(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MongoDB query failed: {str(e)}")
+
+
+@app.get("/mongodb/aggregate/rainfall-by-area", tags=["MongoDB Analytics"])
+async def aggregate_rainfall_by_area(limit: int = Query(10, ge=1, le=100)):
+    """Get average rainfall grouped by area using MongoDB aggregation."""
+    if not MONGODB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    
+    try:
+        pipeline = [
+            {
+                '$group': {
+                    '_id': '$area',
+                    'avg_rainfall': {'$avg': '$average_rain_fall_mm_per_year'},
+                    'min_rainfall': {'$min': '$average_rain_fall_mm_per_year'},
+                    'max_rainfall': {'$max': '$average_rain_fall_mm_per_year'},
+                    'count': {'$sum': 1}
+                }
+            },
+            {'$sort': {'avg_rainfall': -1}},
+            {'$limit': limit}
+        ]
+        
+        results = list(mongo_db.rainfall.aggregate(pipeline))
+        return {"count": len(results), "data": serialize_mongo_doc(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MongoDB aggregation failed: {str(e)}")
+
+
+@app.get("/mongodb/aggregate/temperature-by-country", tags=["MongoDB Analytics"])
+async def aggregate_temperature_by_country(limit: int = Query(10, ge=1, le=100)):
+    """Get average temperature grouped by country using MongoDB aggregation."""
+    if not MONGODB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    
+    try:
+        pipeline = [
+            {
+                '$group': {
+                    '_id': '$country',
+                    'avg_temp': {'$avg': '$avg_temp'},
+                    'min_temp': {'$min': '$avg_temp'},
+                    'max_temp': {'$max': '$avg_temp'},
+                    'count': {'$sum': 1}
+                }
+            },
+            {'$sort': {'avg_temp': -1}},
+            {'$limit': limit}
+        ]
+        
+        results = list(mongo_db.temperature.aggregate(pipeline))
+        return {"count": len(results), "data": serialize_mongo_doc(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MongoDB aggregation failed: {str(e)}")
+
+
+@app.get("/mongodb/aggregate/crop-yield-by-item", tags=["MongoDB Analytics"])
+async def aggregate_crop_yield_by_item(
+    area: Optional[str] = Query(None, description="Filter by area"),
+    limit: int = Query(10, ge=1, le=100)
+):
+    """Get average crop yield grouped by crop item using MongoDB aggregation."""
+    if not MONGODB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    
+    try:
+        match_stage = {}
+        if area:
+            match_stage['area'] = {'$regex': area, '$options': 'i'}
+        
+        pipeline = [
+            {'$match': match_stage} if match_stage else {'$match': {}},
+            {
+                '$group': {
+                    '_id': '$item',
+                    'avg_yield': {'$avg': '$value'},
+                    'min_yield': {'$min': '$value'},
+                    'max_yield': {'$max': '$value'},
+                    'count': {'$sum': 1}
+                }
+            },
+            {'$sort': {'avg_yield': -1}},
+            {'$limit': limit}
+        ]
+        
+        results = list(mongo_db.crop_yield.aggregate(pipeline))
+        return {"count": len(results), "data": serialize_mongo_doc(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MongoDB aggregation failed: {str(e)}")
 
 
 # =====================

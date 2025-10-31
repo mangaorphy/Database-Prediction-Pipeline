@@ -131,7 +131,7 @@ CREATE TABLE data_audit_log (
     record_id INT NOT NULL,
     old_value TEXT,
     new_value TEXT,
-    changed_by VARCHAR(50) DEFAULT USER(),
+    changed_by VARCHAR(50),
     changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_table_name (table_name),
     INDEX idx_operation (operation),
@@ -335,13 +335,15 @@ BEGIN
             operation,
             record_id,
             old_value,
-            new_value
+            new_value,
+            changed_by
         ) VALUES (
             'crop_yield',
             'UPDATE',
             NEW.id,
             CONCAT('area:', OLD.area, ', year:', OLD.year, ', item:', OLD.item, ', value:', IFNULL(OLD.value, 'NULL')),
-            CONCAT('area:', NEW.area, ', year:', NEW.year, ', item:', NEW.item, ', value:', IFNULL(NEW.value, 'NULL'))
+            CONCAT('area:', NEW.area, ', year:', NEW.year, ', item:', NEW.item, ', value:', IFNULL(NEW.value, 'NULL')),
+            USER()
         );
     END IF;
 END//
@@ -398,13 +400,15 @@ BEGIN
         operation,
         record_id,
         old_value,
-        new_value
+        new_value,
+        changed_by
     ) VALUES (
         'pesticides',
         'DELETE',
         OLD.id,
         CONCAT('area:', OLD.area, ', year:', OLD.year, ', value:', IFNULL(OLD.value, 'NULL'), ', unit:', IFNULL(OLD.unit, 'NULL')),
-        NULL
+        NULL,
+        USER()
     );
 END//
 
