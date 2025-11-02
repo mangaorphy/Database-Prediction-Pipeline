@@ -78,3 +78,22 @@ class CropYield(Base):
     __table_args__ = (
         Index('idx_crop_yield_area_year_item', 'area', 'year', 'item'),
     )
+
+    
+    
+class MLFeatures(Base):
+    __tablename__ = 'ml_features'
+    __table_args__ = {'extend_existing': True}
+
+    area = Column(String(100), primary_key=True)
+    year = Column(Integer, primary_key=True)
+    crop_type = Column(String(100), primary_key=True)
+    crop_yield = Column(Float(15, 2))
+    rainfall = Column(Float(10, 2))
+    temperature = Column(Float(6, 2))
+    pesticide_usage = Column(Float(12, 2))
+
+    # Composite key
+    __mapper_args__ = {
+        'primary_key': [area, year, crop_type]
+    }

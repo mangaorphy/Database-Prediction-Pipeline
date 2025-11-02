@@ -11,6 +11,10 @@ import pymysql
 from pathlib import Path
 import sys
 from datetime import datetime
+import io
+
+# Force UTF-8 encoding for stdout
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 sys.path.append(str(Path(__file__).parent.parent))
 from config.database import get_mysql_connection, MYSQL_DATABASE

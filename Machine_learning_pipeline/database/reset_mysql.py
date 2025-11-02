@@ -4,6 +4,11 @@ Reset MySQL database by dropping and recreating it.
 import pymysql
 import sys
 from pathlib import Path
+import sys
+import io
+
+# Force UTF-8 encoding for stdout
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 sys.path.append(str(Path(__file__).parent.parent))
 from config.database import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD

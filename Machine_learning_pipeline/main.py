@@ -15,7 +15,22 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from pymongo import MongoClient
 from bson import ObjectId
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
+from models import Base, Rainfall, Temperature, Pesticides, CropYield, MLFeatures
+
+import sys
+import io
+
+# Force UTF-8 encoding for stdout
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# Add logging configuration and logger
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Import models and schemas from separate files
 from models import Base, Rainfall, Temperature, Pesticides, CropYield
@@ -23,7 +38,18 @@ from schemas import (
     RainfallCreate, RainfallUpdate, RainfallResponse,
     TemperatureCreate, TemperatureUpdate, TemperatureResponse,
     PesticidesCreate, PesticidesUpdate, PesticidesResponse,
-    CropYieldCreate, CropYieldUpdate, CropYieldResponse
+    CropYieldCreate, CropYieldUpdate, CropYieldResponse,
+    MLFeaturesCreate, MLFeaturesUpdate, MLFeaturesResponse
+)
+
+# Import training utilities from separate module
+from train import (
+    TrainRequest as TrainRequestModel,
+    TrainResponse as TrainResponseModel,
+    PredictRequest as PredictRequestModel,
+    PredictResponse as PredictResponseModel,
+    train_model,
+    predict as predict_from_bundle,      # <-- correct alias
 )
 
 # Load environment variables
@@ -35,7 +61,7 @@ load_dotenv()
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = os.getenv("MYSQL_PORT", "3306")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "Rwanda1!")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "agriculture_db")
 
 # Create MySQL connection string
@@ -813,6 +839,144 @@ async def aggregate_crop_yield_by_item(
 
 
 # =====================
+# ML FEATURES ENDPOINTS
+# =====================
+
+@app.post("/ml-features", response_model=MLFeaturesResponse, tags=["ML Features"], status_code=201)
+async def create_ml_features(record: MLFeaturesCreate, db: Session = Depends(get_db)):
+    """Create a new ML features record."""
+    db_record = MLFeatures(**record.dict())
+    db.add(db_record)
+    try:
+        db.commit()
+        db.refresh(db_record)
+        return db_record
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to create ML features record: {str(e)}")
+
+
+@app.get("/ml-features", response_model=List[MLFeaturesResponse], tags=["ML Features"])
+async def read_ml_features(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10000, le=100000),
+    db: Session = Depends(get_db)
+):
+    """List ML features with pagination."""
+    try:
+        # Get total count first
+        total = db.query(MLFeatures).count()
+        print(total)
+        
+        # Fetch paginated results
+        query = db.query(MLFeatures)
+        results = query.offset(skip).limit(limit).all()
+        
+        if not results and skip == 0:
+            raise HTTPException(status_code=404, detail="No ML features found")
+            
+        # Log pagination info
+        logger.info(f"Fetched ml_features: skip={skip}, limit={limit}, returned={len(results)}, total={total}")
+        print([r.__dict__ for r in results])
+        return results
+        
+    except Exception as e:
+        logger.exception("Error fetching ml_features")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database error: {str(e)}"
+        )
+    finally:
+        db.close()
+
+
+@app.get("/ml-features/{record_id}", response_model=MLFeaturesResponse, tags=["ML Features"])
+async def read_ml_features_by_id(record_id: int, db: Session = Depends(get_db)):
+    db_record = db.query(MLFeatures).filter(MLFeatures.id == record_id).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="ML features record not found")
+    return db_record
+
+
+@app.put("/ml-features/{record_id}", response_model=MLFeaturesResponse, tags=["ML Features"])
+async def update_ml_features(record_id: int, record_update: MLFeaturesUpdate, db: Session = Depends(get_db)):
+    db_record = db.query(MLFeatures).filter(MLFeatures.id == record_id).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="ML features record not found")
+    update_data = record_update.dict(exclude_unset=True)
+    for k, v in update_data.items():
+        setattr(db_record, k, v)
+    try:
+        db.commit()
+        db.refresh(db_record)
+        return db_record
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to update ML features record: {str(e)}")
+
+
+@app.delete("/ml-features/{record_id}", tags=["ML Features"], status_code=204)
+async def delete_ml_features(record_id: int, db: Session = Depends(get_db)):
+    db_record = db.query(MLFeatures).filter(MLFeatures.id == record_id).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="ML features record not found")
+    try:
+        db.delete(db_record)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to delete ML features record: {str(e)}")
+
+
+# =====================
+# ML TRAIN / PREDICT
+# =====================
+
+# Use train.py implementations for training/prediction endpoints.
+@app.post("/ml/train", response_model=TrainResponseModel, tags=["Machine Learning"])
+async def train_model_endpoint(payload: TrainRequestModel, db: Session = Depends(get_db)):
+    """
+    Train a model using rows from the ml_features table.
+    Delegates the actual training to train.train_model().
+    """
+    try:
+        result = train_model(db, payload)
+        return result
+    except ValueError as e:
+        # expected validation/usage errors from train.py
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training failed: {e}")
+
+
+@app.post("/ml/predict", response_model=PredictResponseModel, tags=["Machine Learning"])
+async def predict_endpoint(payload: PredictRequestModel):
+    """
+    Predict using a saved model bundle.
+    Delegates prediction to train.predict().
+    """
+    try:
+        result = predict_from_bundle(payload)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+    
+# -------------------------------------------------
+# /ml/predict endpoint – make it return a scalar
+# -------------------------------------------------
+@app.post("/ml/predict", response_model=PredictResponseModel, tags=["Machine Learning"])
+async def predict_endpoint(payload: PredictRequestModel):
+    try:
+        result = predict_from_bundle(payload)          # now returns PredictResponse
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+
+# =====================
 # ROOT ENDPOINT
 # =====================
 
@@ -832,6 +996,9 @@ async def root():
             "health": "/health"
         }
     }
+    
+    
+    
 
 
 if __name__ == "__main__":

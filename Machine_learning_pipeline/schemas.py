@@ -152,3 +152,43 @@ class CropYieldResponse(CropYieldBase):
 
     class Config:
         from_attributes = True
+
+# =====================
+# ML FEATURES MODELS
+# =====================
+class MLFeaturesBase(BaseModel):
+    """Base model for ML features data."""
+    area: str = Field(..., min_length=1, description="Area name")
+    year: int = Field(..., ge=1900, le=2100, description="Year")
+    rainfall: Optional[float] = Field(None, ge=0, description="Rainfall in mm")
+    temperature: Optional[float] = Field(None, description="Temperature in Celsius")
+    pesticide_usage: Optional[float] = Field(None, ge=0, description="Pesticide usage")
+    crop_type: Optional[str] = Field(None, description="Crop type/name")
+    crop_yield: Optional[float] = Field(None, ge=0, description="Crop yield value")
+
+
+class MLFeaturesCreate(MLFeaturesBase):
+    """Model for creating ML features data."""
+    pass
+
+
+class MLFeaturesUpdate(BaseModel):
+    """Model for updating ML features data."""
+    area: Optional[str] = None
+    year: Optional[int] = None
+    rainfall: Optional[float] = None
+    temperature: Optional[float] = None
+    pesticide_usage: Optional[float] = None
+    crop_type: Optional[str] = None
+    crop_yield: Optional[float] = None
+
+
+class MLFeaturesResponse(MLFeaturesBase):
+    """Model for ML features response."""
+    
+    class Config:
+        from_attributes = True
+
+
+class PredictResponse(BaseModel):
+    prediction: float          # <-- changed from Any to float
